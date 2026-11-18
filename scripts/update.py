@@ -62,69 +62,57 @@ def parse_date(value):
  
     return date.fromisoformat(value)
  
- def read_snapshot(csv_bytes, start_date, end_date, results):
-    """讀取 TDCC CSV，避免相同級距重複計算。"""
-
-    text = csv_bytes.decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(text))
-
-    # 先記錄每檔股票、每個日期、每個級距的比例
-    snapshot_levels = {}
-
-    for row in reader:
-
-        row = {
-            (key or "").strip(): (value or "").strip()
-            for key, value in row.items()
-        }
-
-        code = row.get("證券代號", "").strip()
-
-        if code not in results:
-            continue
-
-        try:
-            snapshot_date = parse_date(row["資料日期"])
-            level = int(float(row["持股分級"]))
-
-            ratio = float(
-                row["占集保庫存數比例%"]
-                .replace(",", "")
-                .replace("%", "")
-            )
-
-        except (KeyError, ValueError):
-            continue
-
-        if snapshot_date < start_date or snapshot_date > end_date:
-            continue
-
-        if not FIRST_BIG_HOLDER_LEVEL <= level <= LAST_BIG_HOLDER_LEVEL:
-            continue
-
-        date_key = snapshot_date.isoformat()
-
-        # 同一股票、日期、級距只保留一次
-        key = (code, date_key, level)
-
-        snapshot_levels[key] = ratio
-
-    # 將四個級距加總
-    snapshot_totals = {}
-
-    for (code, date_key, level), ratio in snapshot_levels.items():
-
-        key = (code, date_key)
-
-        snapshot_totals[key] = (
-            snapshot_totals.get(key, 0.0) + ratio
-        )
-
-    # 寫入結果，同日期以後讀取的快照覆蓋
-    for (code, date_key), total in snapshot_totals.items():
-
-        results[code][date_key] = total
-
+ 
+def read_snapshot(csv_bytes, start_date, end_date, results):
+    """讀取一份 TDCC CSV，累計各股票各日期的大戶級距比例。
+ 
+    同一份 CSV 內會加總指定級距；
+    若不同 CSV 有相同日期，後讀入的快照會覆蓋先前資料。
+    """
+    text = csv_bytes.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text))
+ 
+    # 先在目前這份 CSV 內加總各級距，
+    # 避免覆蓋掉同一份檔案內尚未加總完的級距。
+    snapshot_totals = {}
+ 
+    for row in reader:
+        # 去除 CSV 欄位名稱和欄位值前後空白
+        row = {
+            (key or "").strip(): (value or "").strip()
+            for key, value in row.items()
+        }
+ 
+        code = row.get("證券代號", "").strip()
+ 
+        if code not in results:
+            continue
+ 
+        try:
+            snapshot_date = parse_date(row["資料日期"])
+            level = int(float(row["持股分級"]))
+            ratio = float(
+                row["占集保庫存數比例%"]
+                .replace(",", "")
+                .replace("%", "")
+            )
+        except (KeyError, ValueError):
+            continue
+ 
+        if snapshot_date < start_date or snapshot_date > end_date:
+            continue
+ 
+        # 只加總大戶持股級距，略過其他級距、差異調整與合計列
+        if FIRST_BIG_HOLDER_LEVEL <= level <= LAST_BIG_HOLDER_LEVEL:
+            date_key = snapshot_date.isoformat()
+            key = (code, date_key)
+            snapshot_totals[key] = snapshot_totals.get(key, 0.0) + ratio
+ 
+    # 寫回結果。
+    # 若這個日期已由先前的歸檔資料寫入，便以目前這份 CSV 覆蓋。
+    for (code, date_key), total in snapshot_totals.items():
+        results[code][date_key] = total
+ 
  
 def main():
     if not STOCKS:
