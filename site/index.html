@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TDCC 大戶持股趨勢</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 900px;
+      margin: 24px auto;
+      padding: 0 16px;
+      color: #222;
+    }
+
+    select {
+      font-size: 16px;
+      padding: 8px;
+      margin-left: 8px;
+    }
+
+    .chart-box {
+      height: 60vh;
+      min-height: 300px;
+    }
+
+    .note {
+      color: #666;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>TDCC 大戶持股趨勢</h1>
+
+  <label for="stock">選擇股票：</label>
+  <select id="stock"></select>
+
+  <p id="status">載入股票清單中…</p>
+
+  <div class="chart-box">
+    <canvas id="chart"></canvas>
+  </div>
+
+  <p class="note">
+    顯示近六個月 TDCC 持股級距比例加總（第 12–15 級，作為 400 張以上觀察值）。
+    TDCC 資料按期公布，每日檢查不代表每天都會有新資料。
+  </p>
+
+  <script>
+    const stockSelect = document.getElementById("stock");
+    const statusText = document.getElementById("status");
+
+    let chart = null;
+    let stockNames = {};
+
+    async function loadStock(code) {
+      statusText.textContent = "載入資料中…";
+
+      try {
+        const response = await fetch(
+          `./trend-${encodeURIComponent(code)}.csv?t=${Date.now()}`
+        );
+
+        if (!response.ok) {
+          throw new Error("找不到此股票的資料檔");
+        }
+
+        const text = await response.text();
+        const lines = text.trim().split(/\r?\n/).slice(1);
+
+        const data = lines
+          .map(line => {
+            const [date, value] = line.split(",");
+            return {
+              date: date,
+              value: Number(value)
+            };
+          })
+          .filter(row => row.date && Number.isFinite(row.value));
+
+        if (!data.length) {
+          throw new Error("資料檔沒有可繪製的資料");
+        }
+
+        const name = stockNames[code] || "";
+        statusText.textContent =
+          `${code} ${name}｜資料期間：` +
+          `${data[0].date} 至 ${data[data.length - 1].date}`;
+
+        if (chart) {
+          chart.destroy();
+        }
+
+        chart = new Chart(
+          document.getElementById("chart"),
+          {
+            type: "line",
+            data: {
+              labels: data.map(row => row.date),
+              datasets: [{
+                label: `${code} ${name}｜大戶級距比例（%）`,
+                data: data.map(row => row.value),
+                borderColor: "#1261a0",
+                backgroundColor: "rgba(18, 97, 160, 0.12)",
+                fill: true,
+                tension: 0.2,
+                pointRadius: 3
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              scales: {
+                y: {
+                  title: {
+                    display: true,
+                    text: "比例（%）"
+                  }
+                }
+              }
+            }
+          }
+        );
+      } catch (error) {
+        statusText.textContent = `載入失敗：${error.message}`;
+      }
+    }
+
+    async function init() {
+      try {
+        const response = await fetch(`./stocks.json?t=${Date.now()}`);
+
+        if (!response.ok) {
+          throw new Error("找不到 stocks.json");
+        }
+
+        stockNames = await response.json();
+
+        for (const [code, name] of Object.entries(stockNames)) {
+          const option = document.createElement("option");
+          option.value = code;
+          option.textContent = `${code} ${name}`;
+          stockSelect.appendChild(option);
+        }
+
+        stockSelect.addEventListener("change", event => {
+          loadStock(event.target.value);
+        });
+
+        const firstStock = stockSelect.value;
+
+        if (firstStock) {
+          await loadStock(firstStock);
+        } else {
+          statusText.textContent = "股票清單是空的，請檢查 STOCKS 設定。";
+        }
+      } catch (error) {
+        statusText.textContent = `載入失敗：${error.message}`;
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
